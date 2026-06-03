@@ -11,6 +11,7 @@ import {
     getBookingHistory,
     getCurrentBookings,
     getMyTransactions,
+    getTransactionByBookingId,
     getBookingTotal,
     uploadTransaction,
 } from "@/lib/Customer_Service";
@@ -103,35 +104,6 @@ function normalizeTransactions(data: unknown): CustomerTransaction[] {
     return [];
 }
 
-type TransactionWithBookingRef = CustomerTransaction & {
-    bookingId?: number | string | null;
-    booking_id?: number | string | null;
-    booking?: {
-        id?: number | string | null;
-    };
-};
-
-function getTransactionBookingId(transaction?: CustomerTransaction | null) {
-    if (!transaction) return null;
-
-    const trx = transaction as TransactionWithBookingRef;
-
-    return trx.bookingId ?? trx.booking_id ?? trx.booking?.id ?? null;
-}
-
-function findTransactionByBookingId(
-    transactions: CustomerTransaction[],
-    bookingId: number
-) {
-    return (
-        transactions.find(
-            (transaction) =>
-                Number(getTransactionBookingId(transaction)) ===
-                Number(bookingId)
-        ) ?? null
-    );
-}
-
 /* =========================
    LOCAL STORAGE HELPERS
 ========================= */
@@ -146,30 +118,11 @@ function getLocalTransactions(): CustomerTransaction[] {
         const parsed = raw ? JSON.parse(raw) : [];
 
         return Array.isArray(parsed)
-            ? parsed.filter((item) => item && getTransactionBookingId(item))
+            ? parsed.filter((item) => item && item.bookingId)
             : [];
     } catch {
         return [];
     }
-}
-
-function saveLocalTransaction(transaction: CustomerTransaction) {
-    if (typeof window === "undefined") return;
-
-    const bookingId = getTransactionBookingId(transaction);
-    if (!bookingId) return;
-
-    const existing = getLocalTransactions();
-
-    const filtered = existing.filter(
-        (item) =>
-            Number(getTransactionBookingId(item)) !== Number(bookingId)
-    );
-
-    localStorage.setItem(
-        LOCAL_TRANSACTION_KEY,
-        JSON.stringify([transaction, ...filtered])
-    );
 }
 
 function mergeTransactions(
@@ -181,13 +134,34 @@ function mergeTransactions(
     const uniqueByBooking = new Map<number, CustomerTransaction>();
 
     merged.forEach((transaction) => {
-        const bookingId = getTransactionBookingId(transaction);
-        if (!bookingId) return;
-
-        uniqueByBooking.set(Number(bookingId), transaction);
+        if (!transaction?.bookingId) return;
+        uniqueByBooking.set(Number(transaction.bookingId), transaction);
     });
 
     return Array.from(uniqueByBooking.values());
+}
+
+/* =========================
+   DERIVE STATUS HELPER
+   Sama seperti derivedStatus di admin page —
+   derive dari paymentStatus + groomingStatus transaksi,
+   bukan dari booking.status yang tidak diupdate BE.
+========================= */
+
+function deriveBookingStatus(
+    booking: CustomerBooking,
+    transaction?: CustomerTransaction | null
+): string {
+    if (!transaction) return String(booking.status || "pending").toLowerCase();
+
+    const pay = transaction.paymentStatus?.toUpperCase();
+    const groom = transaction.groomingStatus?.toUpperCase();
+
+    if (groom === "DONE") return "completed";
+    if (groom === "PROGRESS") return "proses_grooming";
+    if (pay === "PAID") return "paid";
+
+    return String(booking.status || "pending").toLowerCase();
 }
 
 /* =========================
@@ -196,21 +170,20 @@ function mergeTransactions(
 
 function filterBookings(
     bookings: CustomerBooking[],
+    transactions: CustomerTransaction[],
     keyword: string,
     statusFilter: string
 ) {
     return bookings.filter((booking) => {
+        const transaction = getTransactionByBookingId(transactions, booking.id);
+        const derivedStatus = deriveBookingStatus(booking, transaction);
+
         // Filter by status
         if (statusFilter !== "all") {
-            const bookingStatus = String(booking.status || "")
-                .toLowerCase()
-                .replace(/ /g, "_");
-            const filterValue = statusFilter.toLowerCase();
-
-            if (bookingStatus !== filterValue) return false;
+            if (derivedStatus !== statusFilter.toLowerCase()) return false;
         }
 
-        // Filter by search keyword
+        // Filter by keyword
         const query = keyword.toLowerCase().trim();
         if (!query) return true;
 
@@ -231,12 +204,8 @@ function filterBookings(
 ========================= */
 
 export default function CustomerHistoryPage() {
-    const [currentBookings, setCurrentBookings] = useState<CustomerBooking[]>(
-        []
-    );
-    const [historyBookings, setHistoryBookings] = useState<CustomerBooking[]>(
-        []
-    );
+    const [currentBookings, setCurrentBookings] = useState<CustomerBooking[]>([]);
+    const [historyBookings, setHistoryBookings] = useState<CustomerBooking[]>([]);
     const [transactions, setTransactions] = useState<CustomerTransaction[]>([]);
 
     const [search, setSearch] = useState("");
@@ -246,9 +215,7 @@ export default function CustomerHistoryPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [cancellingId, setCancellingId] = useState<number | null>(null);
     const [uploadingId, setUploadingId] = useState<number | null>(null);
-    const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<
-        number | null
-    >(null);
+    const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<number | null>(null);
 
     const [error, setError] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
@@ -257,39 +224,44 @@ export default function CustomerHistoryPage() {
         fetchHistoryData();
     }, []);
 
-    async function fetchHistoryData() {
+    const fetchHistoryData = async () => {
         try {
             setLoading(true);
             setError("");
 
-            const [currentData, historyData, transactionsData] =
-                await Promise.all([
+            const [currentResult, historyResult, transactionResult] =
+                await Promise.allSettled([
                     getCurrentBookings(),
                     getBookingHistory(),
                     getMyTransactions(),
                 ]);
 
-            const normalizedCurrentBookings = normalizeBookings(currentData);
-            const normalizedHistoryBookings = normalizeBookings(historyData);
-            const normalizedApiTransactions =
-                normalizeTransactions(transactionsData);
-            const localTransactions = getLocalTransactions();
+            if (currentResult.status === "fulfilled") {
+                setCurrentBookings(normalizeBookings(currentResult.value));
+            } else {
+                setCurrentBookings([]);
+                console.error("GET /booking/current error:", currentResult.reason);
+            }
 
-            setCurrentBookings(normalizedCurrentBookings);
-            setHistoryBookings(normalizedHistoryBookings);
-            setTransactions(
-                mergeTransactions(
-                    normalizedApiTransactions,
-                    localTransactions
-                )
-            );
-        } catch (error) {
-            console.error("Gagal mengambil data history:", error);
-            setError("Gagal mengambil data history booking.");
+            if (historyResult.status === "fulfilled") {
+                setHistoryBookings(normalizeBookings(historyResult.value));
+            } else {
+                setHistoryBookings([]);
+                console.error("GET /booking/history error:", historyResult.reason);
+            }
+
+            if (transactionResult.status === "fulfilled") {
+                const apiTransactions = normalizeTransactions(transactionResult.value);
+                const localTransactions = getLocalTransactions();
+                setTransactions(mergeTransactions(apiTransactions, localTransactions));
+            } else {
+                setTransactions(getLocalTransactions());
+                console.error("GET /transaksi/me error:", transactionResult.reason);
+            }
         } finally {
             setLoading(false);
         }
-    }
+    };
 
     const handleRefresh = async () => {
         try {
@@ -302,9 +274,7 @@ export default function CustomerHistoryPage() {
     };
 
     const handleCancelBooking = async (bookingId: number) => {
-        const confirmed = window.confirm(
-            "Yakin ingin membatalkan booking ini?"
-        );
+        const confirmed = window.confirm("Yakin ingin membatalkan booking ini?");
         if (!confirmed) return;
 
         try {
@@ -318,9 +288,7 @@ export default function CustomerHistoryPage() {
             await fetchHistoryData();
         } catch (err) {
             setError(
-                err instanceof Error
-                    ? err.message
-                    : "Gagal membatalkan booking."
+                err instanceof Error ? err.message : "Gagal membatalkan booking."
             );
         } finally {
             setCancellingId(null);
@@ -341,28 +309,17 @@ export default function CustomerHistoryPage() {
             setError("");
             setSuccessMessage("");
 
-            const uploadedTransaction = await uploadTransaction({
+            const newTransaction = await uploadTransaction({
                 bookingId: booking.id,
                 total: getBookingTotal(booking),
                 proof: file,
             });
 
-            const normalizedTransaction = {
-                ...uploadedTransaction,
-                bookingId:
-                    getTransactionBookingId(uploadedTransaction) ?? booking.id,
-            } as CustomerTransaction;
-
-            saveLocalTransaction(normalizedTransaction);
-
             setTransactions((prev) => {
                 const withoutSameBooking = prev.filter(
-                    (transaction) =>
-                        Number(getTransactionBookingId(transaction)) !==
-                        Number(booking.id)
+                    (t) => Number(t.bookingId) !== Number(booking.id)
                 );
-
-                return [normalizedTransaction, ...withoutSameBooking];
+                return [newTransaction, ...withoutSameBooking];
             });
 
             setSuccessMessage(
@@ -372,15 +329,14 @@ export default function CustomerHistoryPage() {
             await fetchHistoryData();
         } catch (err) {
             setError(
-                err instanceof Error
-                    ? err.message
-                    : "Gagal upload bukti pembayaran."
+                err instanceof Error ? err.message : "Gagal upload bukti pembayaran."
             );
         } finally {
             setUploadingId(null);
         }
     };
 
+    // ── Invoice handler ─────────────────────────────────────────────
     const handleDownloadInvoice = async (transaksiId: number) => {
         try {
             setDownloadingInvoiceId(transaksiId);
@@ -388,58 +344,60 @@ export default function CustomerHistoryPage() {
             await downloadInvoice(transaksiId);
         } catch (err) {
             setError(
-                err instanceof Error
-                    ? err.message
-                    : "Gagal mengunduh invoice."
+                err instanceof Error ? err.message : "Gagal mengunduh invoice."
             );
         } finally {
             setDownloadingInvoiceId(null);
         }
     };
 
-    // Semua booking digabung untuk keperluan hitung badge filter
+    // ── Memos ───────────────────────────────────────────────────────
     const allBookings = useMemo(
         () => [...currentBookings, ...historyBookings],
         [currentBookings, historyBookings]
     );
 
-    const filteredCurrentBookings = useMemo(() => {
-        return filterBookings(currentBookings, search, activeFilter);
-    }, [currentBookings, search, activeFilter]);
+    const filteredCurrentBookings = useMemo(
+        () => filterBookings(currentBookings, transactions, search, activeFilter),
+        [currentBookings, transactions, search, activeFilter]
+    );
 
-    const filteredHistoryBookings = useMemo(() => {
-        return filterBookings(historyBookings, search, activeFilter);
-    }, [historyBookings, search, activeFilter]);
+    const filteredHistoryBookings = useMemo(
+        () => filterBookings(historyBookings, transactions, search, activeFilter),
+        [historyBookings, transactions, search, activeFilter]
+    );
 
-    const completedCount = useMemo(() => {
-        return historyBookings.filter(
-            (booking) =>
-                String(booking.status).toLowerCase() === "completed"
-        ).length;
-    }, [historyBookings]);
+    const completedCount = useMemo(
+        () =>
+            allBookings.filter((b) => {
+                const t = getTransactionByBookingId(transactions, b.id);
+                return deriveBookingStatus(b, t) === "completed";
+            }).length,
+        [allBookings, transactions]
+    );
 
-    const cancelledCount = useMemo(() => {
-        return historyBookings.filter((booking) => {
-            const status = String(booking.status).toLowerCase();
-            return status === "cancelled" || status === "canceled";
-        }).length;
-    }, [historyBookings]);
+    const cancelledCount = useMemo(
+        () =>
+            historyBookings.filter((b) => {
+                const s = String(b.status).toLowerCase();
+                return s === "cancelled" || s === "canceled";
+            }).length,
+        [historyBookings]
+    );
 
-    const pendingPaymentCount = useMemo(() => {
-        return currentBookings.filter((booking) => {
-            const transaction = findTransactionByBookingId(
-                transactions,
-                booking.id
-            );
+    const pendingPaymentCount = useMemo(
+        () =>
+            currentBookings.filter((booking) => {
+                const transaction = getTransactionByBookingId(
+                    transactions,
+                    booking.id
+                );
+                return !Boolean(transaction?.proof || transaction?.proofUrl);
+            }).length,
+        [currentBookings, transactions]
+    );
 
-            const hasProof = Boolean(
-                transaction?.proof || transaction?.proofUrl
-            );
-
-            return !hasProof;
-        }).length;
-    }, [currentBookings, transactions]);
-
+    // ── Render ──────────────────────────────────────────────────────
     return (
         <section className="mx-auto max-w-7xl px-5 py-8">
             {error && (
@@ -470,8 +428,7 @@ export default function CustomerHistoryPage() {
                         </h1>
 
                         <p className="mt-4 max-w-2xl text-gray-600">
-                            Pantau booking aktif, status pembayaran, dan
-                            riwayat grooming anabul kamu.
+                            Pantau booking aktif, status pembayaran, dan riwayat grooming anabul kamu.
                         </p>
                     </div>
 
@@ -497,19 +454,16 @@ export default function CustomerHistoryPage() {
                     value={currentBookings.length}
                     desc="Booking yang sedang berjalan"
                 />
-
                 <HistorySummaryCard
                     title="Menunggu Payment"
                     value={pendingPaymentCount}
                     desc="Perlu upload/verifikasi pembayaran"
                 />
-
                 <HistorySummaryCard
                     title="Completed"
                     value={completedCount}
                     desc="Grooming yang sudah selesai"
                 />
-
                 <HistorySummaryCard
                     title="Cancelled"
                     value={cancelledCount}
@@ -524,10 +478,8 @@ export default function CustomerHistoryPage() {
                         <h2 className="text-2xl font-bold text-[#013B09]">
                             Cari Booking
                         </h2>
-
                         <p className="mt-1 text-sm text-gray-500">
-                            Cari berdasarkan ID booking, pet, paket, status,
-                            tanggal, atau jam.
+                            Cari berdasarkan ID booking, pet, paket, status, tanggal, atau jam.
                         </p>
                     </div>
 
@@ -536,12 +488,9 @@ export default function CustomerHistoryPage() {
                             size={18}
                             className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
                         />
-
                         <input
                             value={search}
-                            onChange={(event) =>
-                                setSearch(event.target.value)
-                            }
+                            onChange={(event) => setSearch(event.target.value)}
                             placeholder="Cari history..."
                             className="h-12 w-full rounded-2xl border border-[#A7E8B0]/50 bg-[#F0FEF1] pl-11 pr-4 text-sm text-[#013B09] outline-none transition focus:border-[#013B09]"
                         />
@@ -557,11 +506,13 @@ export default function CustomerHistoryPage() {
                             filter.value === "all"
                                 ? allBookings.length
                                 : allBookings.filter((b) => {
-                                      const s = String(b.status || "")
-                                          .toLowerCase()
-                                          .replace(/ /g, "_");
+                                      const t = getTransactionByBookingId(
+                                          transactions,
+                                          b.id
+                                      );
                                       return (
-                                          s === filter.value.toLowerCase()
+                                          deriveBookingStatus(b, t) ===
+                                          filter.value.toLowerCase()
                                       );
                                   }).length;
 
@@ -620,33 +571,22 @@ export default function CustomerHistoryPage() {
                             />
                         ) : (
                             <div className="space-y-5">
-                                {filteredCurrentBookings.map((booking) => {
-                                    const transaction =
-                                        findTransactionByBookingId(
+                                {filteredCurrentBookings.map((booking) => (
+                                    <HistoryBookingCard
+                                        key={booking.id}
+                                        booking={booking}
+                                        transaction={getTransactionByBookingId(
                                             transactions,
                                             booking.id
-                                        );
-
-                                    return (
-                                        <HistoryBookingCard
-                                            key={booking.id}
-                                            booking={booking}
-                                            transaction={transaction}
-                                            onCancel={handleCancelBooking}
-                                            cancellingId={cancellingId}
-                                            onUploadProof={
-                                                handleUploadProofFromHistory
-                                            }
-                                            uploadingId={uploadingId}
-                                            onDownloadInvoice={
-                                                handleDownloadInvoice
-                                            }
-                                            downloadingInvoiceId={
-                                                downloadingInvoiceId
-                                            }
-                                        />
-                                    );
-                                })}
+                                        )}
+                                        onCancel={handleCancelBooking}
+                                        cancellingId={cancellingId}
+                                        onUploadProof={handleUploadProofFromHistory}
+                                        uploadingId={uploadingId}
+                                        onDownloadInvoice={handleDownloadInvoice}
+                                        downloadingInvoiceId={downloadingInvoiceId}
+                                    />
+                                ))}
                             </div>
                         )}
                     </section>
@@ -673,33 +613,18 @@ export default function CustomerHistoryPage() {
                             />
                         ) : (
                             <div className="space-y-5">
-                                {filteredHistoryBookings.map((booking) => {
-                                    const transaction =
-                                        findTransactionByBookingId(
+                                {filteredHistoryBookings.map((booking) => (
+                                    <HistoryBookingCard
+                                        key={booking.id}
+                                        booking={booking}
+                                        transaction={getTransactionByBookingId(
                                             transactions,
                                             booking.id
-                                        );
-
-                                    return (
-                                        <HistoryBookingCard
-                                            key={booking.id}
-                                            booking={booking}
-                                            transaction={transaction}
-                                            onCancel={handleCancelBooking}
-                                            cancellingId={cancellingId}
-                                            onUploadProof={
-                                                handleUploadProofFromHistory
-                                            }
-                                            uploadingId={uploadingId}
-                                            onDownloadInvoice={
-                                                handleDownloadInvoice
-                                            }
-                                            downloadingInvoiceId={
-                                                downloadingInvoiceId
-                                            }
-                                        />
-                                    );
-                                })}
+                                        )}
+                                        onDownloadInvoice={handleDownloadInvoice}
+                                        downloadingInvoiceId={downloadingInvoiceId}
+                                    />
+                                ))}
                             </div>
                         )}
                     </section>

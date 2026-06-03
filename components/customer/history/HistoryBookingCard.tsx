@@ -19,6 +19,9 @@ import {
     formatDateIndonesia,
     formatRupiah,
     getBookingTotal,
+    deriveCustomerBookingStatus,
+    getGroomingStatusLabel,
+    getGroomingStatusStyle,
 } from "@/lib/Customer_Service";
 
 import {
@@ -37,9 +40,15 @@ interface HistoryBookingCardProps {
     downloadingInvoiceId?: number | null;
 }
 
-function canCancelBooking(status?: string | null) {
-    const normalized = String(status || "").toLowerCase();
+function canCancelBooking(
+    bookingStatus?: string | null,
+    transaction?: CustomerTransaction | null
+) {
+    // Tidak bisa cancel kalau grooming sudah berjalan atau selesai
+    const groom = (transaction?.groomingStatus ?? "").toUpperCase();
+    if (groom === "PROGRESS" || groom === "DONE") return false;
 
+    const normalized = String(bookingStatus || "").toLowerCase();
     return normalized === "pending" || normalized === "paid";
 }
 
@@ -58,24 +67,31 @@ export default function HistoryBookingCard({
     }
 
     const bookingId = booking.id;
-
     const total = transaction?.total ?? getBookingTotal(booking);
-
     const proofUrl = transaction?.proofUrl || transaction?.proof || "";
     const hasProof = Boolean(proofUrl);
 
-    const bookingStatus = String(booking.status || "").toLowerCase();
+    // Derive status dari transaksi (paymentStatus + groomingStatus)
+    // agar sinkron dengan perubahan yang dilakukan admin
+    const derivedStatus = deriveCustomerBookingStatus(
+        booking.status,
+        transaction
+    );
 
-    const paymentVerified =
-        bookingStatus === "paid" ||
-        bookingStatus === "proses_grooming" ||
-        bookingStatus === "on_progress" ||
-        bookingStatus === "on progress" ||
-        bookingStatus === "completed" ||
-        transaction?.status === "paid";
-
+    // paymentStatus dari BE baru, fallback ke status lama
     const paymentStatus =
-        transaction?.status || (hasProof ? "pending" : undefined);
+        transaction?.paymentStatus ||
+        transaction?.status ||
+        (hasProof ? "PENDING" : undefined);
+
+    // groomingStatus dari BE baru
+    const groomingStatus = transaction?.groomingStatus;
+    const groomingLabel = getGroomingStatusLabel(groomingStatus);
+
+    // Pembayaran dianggap verified kalau paymentStatus PAID
+    const paymentVerified =
+        (transaction?.paymentStatus ?? "").toUpperCase() === "PAID" ||
+        (transaction?.status ?? "").toLowerCase() === "paid";
 
     const isCancelling = cancellingId === bookingId;
     const isUploading = uploadingId === bookingId;
@@ -83,17 +99,45 @@ export default function HistoryBookingCard({
         transaction?.id !== undefined &&
         downloadingInvoiceId === transaction.id;
 
-    const showUploadButton = Boolean(onUploadProof) && !hasProof;
+    // Tampilkan upload hanya kalau belum ada bukti DAN belum PAID
+    const showUploadButton =
+        Boolean(onUploadProof) &&
+        !hasProof &&
+        !paymentVerified &&
+        derivedStatus !== "completed" &&
+        derivedStatus !== "reject" &&
+        derivedStatus !== "cancelled";
+
     const showCancelButton =
-        Boolean(onCancel) && canCancelBooking(booking.status);
+        Boolean(onCancel) && canCancelBooking(booking.status, transaction);
+
     const showInvoiceButton =
         Boolean(onDownloadInvoice) && Boolean(transaction?.id);
 
     const petName = booking.pet?.name || `Pet #${booking.petId || "-"}`;
     const petType = booking.pet?.type || "Pet Grooming";
-
     const packageName =
         booking.package?.name || `Package #${booking.packageId || "-"}`;
+
+    // Pesan status payment yang ditampilkan ke customer
+    function getPaymentMessage(): string {
+        if (!transaction) {
+            return "Bukti pembayaran belum tersedia. Silakan upload bukti pembayaran.";
+        }
+
+        const pay = (transaction.paymentStatus ?? transaction.status ?? "")
+            .toUpperCase();
+        const groom = (transaction.groomingStatus ?? "").toUpperCase();
+
+        if (groom === "DONE") return "Grooming sudah selesai.";
+        if (groom === "PROGRESS") return "Grooming sedang berlangsung.";
+        if (pay === "PAID")
+            return "Pembayaran sudah diverifikasi admin. Menunggu jadwal grooming.";
+        if (pay === "PENDING")
+            return "Bukti pembayaran sudah diupload. Menunggu verifikasi admin.";
+
+        return "Bukti pembayaran sudah diupload. Menunggu verifikasi admin.";
+    }
 
     return (
         <div className="rounded-3xl border border-[#A7E8B0]/40 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-md">
@@ -118,9 +162,18 @@ export default function HistoryBookingCard({
                     </div>
                 </div>
 
+                {/* Badge pakai derivedStatus agar sinkron dengan admin */}
                 <div className="flex flex-wrap gap-2">
-                    <BookingStatusBadge status={booking.status} />
+                    <BookingStatusBadge status={derivedStatus} />
                     <PaymentStatusBadge status={paymentStatus} />
+                    {/* Badge grooming status kalau ada */}
+                    {groomingLabel && (
+                        <span
+                            className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${getGroomingStatusStyle(groomingStatus)}`}
+                        >
+                            {groomingLabel}
+                        </span>
+                    )}
                 </div>
             </div>
 
@@ -151,6 +204,7 @@ export default function HistoryBookingCard({
                 />
             </div>
 
+            {/* STATUS PAYMENT INFO BOX */}
             <div className="mt-5 rounded-2xl bg-[#F0FEF1] p-4">
                 <p className="text-xs text-gray-500">Status Payment</p>
 
@@ -160,21 +214,12 @@ export default function HistoryBookingCard({
                         : "Belum ada data transaksi / bukti pembayaran"}
                 </p>
 
-                {hasProof ? (
-                    <p className="mt-1 text-xs text-gray-500">
-                        Bukti pembayaran sudah diupload.{" "}
-                        {paymentVerified
-                            ? "Pembayaran sudah diverifikasi admin."
-                            : "Menunggu verifikasi admin."}
-                    </p>
-                ) : (
-                    <p className="mt-1 text-xs text-gray-500">
-                        Bukti pembayaran belum tersedia. Silakan upload bukti
-                        pembayaran.
-                    </p>
-                )}
+                <p className="mt-1 text-xs text-gray-500">
+                    {getPaymentMessage()}
+                </p>
             </div>
 
+            {/* UPLOAD BUTTON — hanya muncul kalau belum ada bukti & belum verified */}
             {showUploadButton && (
                 <label className="mt-5 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-[#A7E8B0] bg-[#F0FEF1] px-5 py-4 text-sm font-semibold text-[#013B09] transition hover:bg-white">
                     <CreditCard size={18} />
@@ -201,6 +246,7 @@ export default function HistoryBookingCard({
                 </label>
             )}
 
+            {/* DETAIL TRANSAKSI — muncul kalau sudah ada bukti */}
             {hasProof && transaction && (
                 <div className="mt-5 rounded-2xl border border-[#A7E8B0]/50 bg-white p-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -217,7 +263,6 @@ export default function HistoryBookingCard({
                         </div>
 
                         <div className="flex flex-wrap gap-2">
-                            {/* Lihat Bukti */}
                             <a
                                 href={proofUrl}
                                 target="_blank"
@@ -228,7 +273,6 @@ export default function HistoryBookingCard({
                                 Lihat Bukti
                             </a>
 
-                            {/* Unduh Bukti */}
                             <a
                                 href={proofUrl}
                                 download
@@ -240,7 +284,6 @@ export default function HistoryBookingCard({
                                 Unduh Bukti
                             </a>
 
-                            {/* Download Invoice */}
                             {showInvoiceButton && (
                                 <button
                                     type="button"
@@ -264,7 +307,6 @@ export default function HistoryBookingCard({
                             <p className="text-xs text-gray-500">
                                 ID Transaksi
                             </p>
-
                             <p className="mt-1 font-semibold text-[#013B09]">
                                 #{transaction.id || "-"}
                             </p>
@@ -274,7 +316,6 @@ export default function HistoryBookingCard({
                             <p className="text-xs text-gray-500">
                                 Booking ID
                             </p>
-
                             <p className="mt-1 font-semibold text-[#013B09]">
                                 #{transaction.bookingId || bookingId}
                             </p>
@@ -282,7 +323,6 @@ export default function HistoryBookingCard({
 
                         <div className="rounded-xl bg-[#F0FEF1] p-3">
                             <p className="text-xs text-gray-500">Nominal</p>
-
                             <p className="mt-1 font-semibold text-[#F96302]">
                                 {formatRupiah(transaction.total ?? total)}
                             </p>

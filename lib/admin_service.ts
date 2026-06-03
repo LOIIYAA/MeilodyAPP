@@ -1,4 +1,4 @@
-// lib/Admin_Service.ts
+// lib/admin_service.ts
 
 const API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
@@ -177,13 +177,21 @@ export type TransactionStatus =
     | "cancelled"
     | string;
 
+// Status baru sesuai endpoint BE
+export type PaymentStatus = "PENDING" | "PAID" | string;
+export type GroomingStatus = "WAITING" | "PROGRESS" | "DONE" | string;
+
 export interface AdminTransaction {
     id: number;
     bookingId: number;
     total: number | string;
     proof?: string;
     proofUrl?: string;
+    // Status lama (fallback kompatibilitas)
     status?: TransactionStatus;
+    // Status baru dari BE
+    paymentStatus?: PaymentStatus;
+    groomingStatus?: GroomingStatus;
     createdAt?: string;
     updatedAt?: string;
     booking?: AdminBooking;
@@ -191,6 +199,10 @@ export interface AdminTransaction {
 
 export interface UpdateTransactionStatusPayload {
     status: TransactionStatus;
+}
+
+export interface UpdateGroomingStatusPayload {
+    status: GroomingStatus;
 }
 
 /* =========================
@@ -225,9 +237,7 @@ export function getAdminGroomingPackageById(id: number | string) {
     });
 }
 
-export function createAdminGroomingPackage(
-    payload: GroomingPackagePayload
-) {
+export function createAdminGroomingPackage(payload: GroomingPackagePayload) {
     return apiRequest<GroomingPackage>("/grooming-package", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -283,7 +293,9 @@ export function updateAdminBookingStatus(
    TRANSAKSI ADMIN
    GET   /transaksi
    GET   /transaksi/:id
-   PATCH /transaksi/:id/status
+   PATCH /transaksi/:id/status   — update status lama (fallback)
+   PATCH /transaksi/:id/verify   — verifikasi pembayaran → paymentStatus: PAID
+   PATCH /transaksi/:id/grooming — update grooming status (PROGRESS | DONE)
 ========================= */
 
 export function getAdminTransactions() {
@@ -303,6 +315,22 @@ export function updateAdminTransactionStatus(
     payload: UpdateTransactionStatusPayload
 ) {
     return apiRequest<AdminTransaction>(`/transaksi/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+    });
+}
+
+export function verifyAdminPayment(id: number | string) {
+    return apiRequest<AdminTransaction>(`/transaksi/${id}/verify`, {
+        method: "PATCH",
+    });
+}
+
+export function updateAdminGroomingStatus(
+    id: number | string,
+    payload: UpdateGroomingStatusPayload
+) {
+    return apiRequest<AdminTransaction>(`/transaksi/${id}/grooming`, {
         method: "PATCH",
         body: JSON.stringify(payload),
     });

@@ -180,6 +180,10 @@ export type TransactionStatus =
     | "waiting"
     | string;
 
+// Status baru dari BE
+export type PaymentStatus = "PENDING" | "PAID" | string;
+export type GroomingStatus = "WAITING" | "PROGRESS" | "DONE" | string;
+
 export interface UploadTransactionPayload {
     bookingId: number;
     total: number | string;
@@ -193,7 +197,11 @@ export interface CustomerTransaction {
     total: number | string;
     proof?: string;
     proofUrl?: string;
+    // Status lama (fallback kompatibilitas)
     status?: TransactionStatus;
+    // Status baru dari BE
+    paymentStatus?: PaymentStatus;
+    groomingStatus?: GroomingStatus;
     createdAt?: string;
     updatedAt?: string;
     booking?: CustomerBooking;
@@ -409,8 +417,8 @@ export async function getAvailableSlots(date: string) {
 
 /* =========================
    TRANSAKSI / PAYMENT
-   POST GET /transaksi
-   GET  /transaksi/my
+   POST /transaksi
+   GET  /transaksi/me
    GET  /transaksi/:id
    GET  /transaksi/:id/print  ← invoice
 ========================= */
@@ -463,7 +471,6 @@ export async function downloadInvoice(transaksiId: number | string) {
         );
     }
 
-    // Backend return PDF binary, buka sebagai blob PDF
     const blob = await response.blob();
     const url = URL.createObjectURL(
         new Blob([blob], { type: "application/pdf" })
@@ -471,7 +478,6 @@ export async function downloadInvoice(transaksiId: number | string) {
 
     window.open(url, "_blank");
 
-    // Cleanup blob URL setelah dibuka
     setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
@@ -567,12 +573,11 @@ export function getBookingStatusStyle(status?: string | null) {
 }
 
 export function getPaymentStatusLabel(status?: string | null) {
-    const normalized = normalizeBookingStatus(status);
+    const normalized = String(status || "").toLowerCase();
 
     if (normalized === "pending" || normalized === "waiting") {
         return "Menunggu Verifikasi";
     }
-
     if (normalized === "paid") return "Pembayaran Disetujui";
     if (normalized === "reject") return "Pembayaran Ditolak";
     if (normalized === "cancelled" || normalized === "canceled") {
@@ -583,7 +588,7 @@ export function getPaymentStatusLabel(status?: string | null) {
 }
 
 export function getPaymentStatusStyle(status?: string | null) {
-    const normalized = normalizeBookingStatus(status);
+    const normalized = String(status || "").toLowerCase();
 
     if (normalized === "pending" || normalized === "waiting") {
         return "border-yellow-200 bg-yellow-50 text-yellow-700";
@@ -599,6 +604,33 @@ export function getPaymentStatusStyle(status?: string | null) {
         normalized === "canceled"
     ) {
         return "border-red-200 bg-red-50 text-red-700";
+    }
+
+    return "border-gray-200 bg-gray-50 text-gray-700";
+}
+
+// Helper baru: label & style untuk groomingStatus dari BE
+export function getGroomingStatusLabel(status?: string | null) {
+    const normalized = String(status || "").toUpperCase();
+
+    if (normalized === "WAITING") return "Menunggu Grooming";
+    if (normalized === "PROGRESS") return "Sedang Grooming";
+    if (normalized === "DONE") return "Grooming Selesai";
+
+    return null; // null = tidak perlu ditampilkan
+}
+
+export function getGroomingStatusStyle(status?: string | null) {
+    const normalized = String(status || "").toUpperCase();
+
+    if (normalized === "WAITING") {
+        return "border-yellow-200 bg-yellow-50 text-yellow-700";
+    }
+    if (normalized === "PROGRESS") {
+        return "border-orange-200 bg-orange-50 text-orange-700";
+    }
+    if (normalized === "DONE") {
+        return "border-green-200 bg-green-50 text-green-700";
     }
 
     return "border-gray-200 bg-gray-50 text-gray-700";
@@ -627,4 +659,23 @@ export function getBookingTotal(booking?: CustomerBooking | null) {
     if (!booking) return 0;
 
     return booking.package?.price ?? booking.transaction?.total ?? 0;
+}
+
+// Helper derive status customer dari paymentStatus + groomingStatus transaksi
+// Sama seperti di admin, karena BE tidak otomatis sync booking.status
+export function deriveCustomerBookingStatus(
+    bookingStatus?: string | null,
+    transaction?: CustomerTransaction | null
+): string {
+    if (!transaction) return bookingStatus ?? "pending";
+
+    const pay = (transaction.paymentStatus ?? transaction.status ?? "")
+        .toUpperCase();
+    const groom = (transaction.groomingStatus ?? "").toUpperCase();
+
+    if (groom === "DONE") return "completed";
+    if (groom === "PROGRESS") return "proses_grooming";
+    if (pay === "PAID") return "paid";
+
+    return bookingStatus ?? "pending";
 }

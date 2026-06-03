@@ -20,7 +20,6 @@ import {
 import {
     AdminBooking,
     AdminTransaction,
-    BookingStatus,
     formatAdminDate,
     formatAdminRupiah,
     getAdminBookingById,
@@ -28,6 +27,8 @@ import {
     getBookingStatusLabel,
     getBookingStatusStyle,
     updateAdminBookingStatus,
+    verifyAdminPayment,
+    updateAdminGroomingStatus,
 } from "@/lib/admin_service";
 
 const API_BASE_URL =
@@ -47,9 +48,7 @@ export default function AdminBookingDetailPage() {
     const [successMessage, setSuccessMessage] = useState("");
 
     useEffect(() => {
-        if (bookingId) {
-            fetchDetail();
-        }
+        if (bookingId) fetchDetail();
     }, [bookingId]);
 
     const fetchDetail = async () => {
@@ -81,13 +80,9 @@ export default function AdminBookingDetailPage() {
 
     const transaction = useMemo(() => {
         if (!booking) return null;
-
         if (booking.transaction) return booking.transaction;
-
-        if (Array.isArray(booking.transaksi) && booking.transaksi.length > 0) {
+        if (Array.isArray(booking.transaksi) && booking.transaksi.length > 0)
             return booking.transaksi[0];
-        }
-
         return (
             transactions.find(
                 (item) => Number(item.bookingId) === Number(booking.id)
@@ -95,62 +90,113 @@ export default function AdminBookingDetailPage() {
         );
     }, [booking, transactions]);
 
+    // Derive status tampilan dari transaksi karena BE tidak otomatis
+    // update booking.status saat transaksi di-verify / grooming diupdate
+    const derivedStatus = useMemo(() => {
+        if (!transaction) return booking?.status ?? "pending";
+
+        const pay = transaction.paymentStatus?.toUpperCase();
+        const groom = transaction.groomingStatus?.toUpperCase();
+
+        if (groom === "DONE") return "completed";
+        if (groom === "PROGRESS") return "proses_grooming";
+        if (pay === "PAID") return "paid";
+
+        return booking?.status ?? "pending";
+    }, [transaction, booking]);
+
     const proofImage = useMemo(() => {
         const rawProof = transaction?.proofUrl || transaction?.proof;
-
         if (!rawProof) return "";
-
         const cleanProof = String(rawProof).replace(/\\/g, "/");
-
         if (cleanProof.startsWith("http")) return cleanProof;
-
-        if (cleanProof.startsWith("/")) {
+        if (cleanProof.startsWith("/"))
             return `${API_BASE_URL.replace(/\/$/, "")}${cleanProof}`;
-        }
-
         return `${API_BASE_URL.replace(/\/$/, "")}/${cleanProof}`;
     }, [transaction]);
 
-    const handleUpdateStatus = async (status: BookingStatus) => {
-        if (!booking) return;
+    // ── Helpers status ──────────────────────────────────────────────
+    const paymentStatus = transaction?.paymentStatus?.toUpperCase();
+    const groomingStatus = transaction?.groomingStatus?.toUpperCase();
 
+    const canVerify = !!transaction && paymentStatus === "PENDING";
+    const canStartGrooming =
+        !!transaction &&
+        paymentStatus === "PAID" &&
+        groomingStatus === "WAITING";
+    const canComplete =
+        !!transaction &&
+        paymentStatus === "PAID" &&
+        groomingStatus === "PROGRESS";
+    const canReject =
+        derivedStatus !== "completed" &&
+        derivedStatus !== "reject" &&
+        groomingStatus !== "DONE";
+
+    // ── Pesan hint ──────────────────────────────────────────────────
+    function getActionHint(): string {
+        if (!transaction)
+            return "Menunggu customer upload bukti pembayaran.";
+        if (paymentStatus === "PENDING")
+            return "Bukti pembayaran sudah diupload. Verifikasi untuk melanjutkan.";
+        if (paymentStatus === "PAID" && groomingStatus === "WAITING")
+            return "Pembayaran terverifikasi. Mulai sesi grooming.";
+        if (paymentStatus === "PAID" && groomingStatus === "PROGRESS")
+            return "Grooming sedang berjalan. Tandai selesai setelah selesai.";
+        if (groomingStatus === "DONE")
+            return "Grooming sudah selesai.";
+        return "";
+    }
+
+    // ── Action handlers ─────────────────────────────────────────────
+    const withUpdating = async (fn: () => Promise<void>) => {
         try {
             setUpdating(true);
             setError("");
             setSuccessMessage("");
-
-            const updatedBooking = await updateAdminBookingStatus(booking.id, {
-                status,
-            });
-
-            setBooking((prev) => {
-                if (!prev) return updatedBooking;
-
-                return {
-                    ...prev,
-                    ...updatedBooking,
-                    pet: updatedBooking.pet ?? prev.pet,
-                    package: updatedBooking.package ?? prev.package,
-                    user: updatedBooking.user ?? prev.user,
-                    owner: updatedBooking.owner ?? prev.owner,
-                    transaksi: updatedBooking.transaksi ?? prev.transaksi,
-                    transaction:
-                        updatedBooking.transaction ?? prev.transaction,
-                };
-            });
-
-            setSuccessMessage("Status booking berhasil diperbarui.");
+            await fn();
+            setSuccessMessage("Status berhasil diperbarui.");
+            await fetchDetail();
         } catch (err) {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Gagal memperbarui status booking."
+                    : "Gagal memperbarui status."
             );
         } finally {
             setUpdating(false);
         }
     };
 
+    const handleVerifyPayment = () =>
+        withUpdating(async () => {
+            if (!transaction) throw new Error("Transaksi tidak ditemukan.");
+            await verifyAdminPayment(transaction.id);
+        });
+
+    const handleStartGrooming = () =>
+        withUpdating(async () => {
+            if (!transaction) throw new Error("Transaksi tidak ditemukan.");
+            await updateAdminGroomingStatus(transaction.id, {
+                status: "PROGRESS",
+            });
+        });
+
+    const handleMarkCompleted = () =>
+        withUpdating(async () => {
+            if (!transaction) throw new Error("Transaksi tidak ditemukan.");
+            await updateAdminGroomingStatus(transaction.id, {
+                status: "DONE",
+            });
+        });
+
+    const handleReject = () =>
+        withUpdating(async () => {
+            if (!booking) throw new Error("Booking tidak ditemukan.");
+            await updateAdminBookingStatus(booking.id, { status: "reject" });
+        });
+
+    // ── Render ──────────────────────────────────────────────────────
     if (loading) {
         return (
             <section className="space-y-6">
@@ -171,10 +217,8 @@ export default function AdminBookingDetailPage() {
                     <ArrowLeft size={18} />
                     Kembali ke Booking
                 </Link>
-
                 <div className="rounded-3xl bg-white p-10 text-center shadow-sm">
                     <CalendarDays className="mx-auto h-14 w-14 text-[#013B09]" />
-
                     <h1 className="mt-4 text-2xl font-bold text-[#013B09]">
                         Booking tidak ditemukan
                     </h1>
@@ -189,7 +233,9 @@ export default function AdminBookingDetailPage() {
         `User #${booking.userId}`;
 
     const ownerEmail =
-        booking.user?.email || booking.owner?.email || "Email tidak tersedia";
+        booking.user?.email ||
+        booking.owner?.email ||
+        "Email tidak tersedia";
 
     const totalPrice = booking.package?.price ?? transaction?.total ?? 0;
 
@@ -218,29 +264,27 @@ export default function AdminBookingDetailPage() {
             {/* HERO */}
             <div className="relative overflow-hidden rounded-3xl bg-[#013B09] p-8 text-white shadow-sm md:p-10">
                 <CalendarDays className="absolute right-10 top-8 h-24 w-24 rotate-12 text-white/10" />
-
                 <div className="relative z-10 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
                     <div>
                         <p className="mb-3 inline-flex rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-[#A7E8B0]">
                             Booking Detail
                         </p>
-
                         <h1 className="text-3xl font-bold md:text-5xl">
                             Booking #{booking.id}
                         </h1>
-
                         <p className="mt-4 max-w-2xl text-white/75">
                             Review detail booking, cek bukti pembayaran, dan
                             update status grooming customer.
                         </p>
                     </div>
 
+                    {/* Badge pakai derivedStatus bukan booking.status */}
                     <span
                         className={`inline-flex w-fit rounded-full border px-4 py-2 text-sm font-semibold ${getBookingStatusStyle(
-                            booking.status
+                            derivedStatus
                         )}`}
                     >
-                        {getBookingStatusLabel(booking.status)}
+                        {getBookingStatusLabel(derivedStatus)}
                     </span>
                 </div>
             </div>
@@ -251,26 +295,24 @@ export default function AdminBookingDetailPage() {
                     <h2 className="text-2xl font-bold text-[#013B09]">
                         Informasi Booking
                     </h2>
-
                     <p className="mt-1 text-sm text-gray-500">
                         Data lengkap booking grooming customer.
                     </p>
-
                     <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
                         <InfoCard
                             icon={<PawPrint size={22} />}
                             label="Nama Pet"
-                            value={booking.pet?.name || `Pet #${booking.petId}`}
+                            value={
+                                booking.pet?.name || `Pet #${booking.petId}`
+                            }
                             desc={booking.pet?.type || "Pet"}
                         />
-
                         <InfoCard
                             icon={<UserRound size={22} />}
                             label="Owner"
                             value={ownerName}
                             desc={ownerEmail}
                         />
-
                         <InfoCard
                             icon={<Scissors size={22} />}
                             label="Paket Grooming"
@@ -279,25 +321,21 @@ export default function AdminBookingDetailPage() {
                                 `Package #${booking.packageId}`
                             }
                             desc={
-                                booking.package?.description ||
-                                "Paket grooming"
+                                booking.package?.description || "Paket grooming"
                             }
                         />
-
                         <InfoCard
                             icon={<CreditCard size={22} />}
                             label="Total Pembayaran"
                             value={formatAdminRupiah(totalPrice)}
                             desc="Total dari package / transaksi"
                         />
-
                         <InfoCard
                             icon={<CalendarDays size={22} />}
                             label="Tanggal"
                             value={formatAdminDate(booking.tanggal)}
                             desc="Tanggal booking"
                         />
-
                         <InfoCard
                             icon={<Clock3 size={22} />}
                             label="Jam"
@@ -305,12 +343,10 @@ export default function AdminBookingDetailPage() {
                             desc="Slot grooming"
                         />
                     </div>
-
                     <div className="mt-6 rounded-3xl bg-[#F0FEF1] p-5">
                         <p className="text-sm font-semibold text-[#013B09]">
                             Deskripsi Paket
                         </p>
-
                         <p className="mt-2 text-sm leading-relaxed text-gray-600">
                             {booking.package?.description ||
                                 "Tidak ada deskripsi paket."}
@@ -323,11 +359,9 @@ export default function AdminBookingDetailPage() {
                     <h2 className="text-2xl font-bold text-[#013B09]">
                         Bukti Pembayaran
                     </h2>
-
                     <p className="mt-1 text-sm text-gray-500">
                         Preview bukti pembayaran dari customer.
                     </p>
-
                     <div className="mt-6">
                         {proofImage ? (
                             <div className="flex h-80 items-center justify-center overflow-hidden rounded-3xl border border-[#A7E8B0]/40 bg-[#F0FEF1]">
@@ -340,31 +374,35 @@ export default function AdminBookingDetailPage() {
                         ) : (
                             <div className="flex h-80 flex-col items-center justify-center rounded-3xl border border-dashed border-[#A7E8B0] bg-[#F0FEF1] text-center">
                                 <CreditCard className="h-14 w-14 text-[#013B09]" />
-
                                 <h3 className="mt-4 text-xl font-bold text-[#013B09]">
                                     Belum ada bukti pembayaran
                                 </h3>
-
                                 <p className="mt-2 max-w-sm text-sm text-gray-500">
-                                    Bukti pembayaran akan muncul setelah customer
-                                    upload transaksi.
+                                    Bukti pembayaran akan muncul setelah
+                                    customer upload transaksi.
                                 </p>
                             </div>
                         )}
                     </div>
 
-                    <div className="mt-5 rounded-3xl bg-[#F0FEF1] p-5">
-                        <p className="text-xs text-gray-500">
-                            Status Transaksi
-                        </p>
-
-                        <p className="mt-1 text-lg font-bold text-[#013B09]">
-                            {transaction?.status || "Belum tersedia"}
-                        </p>
-
-                        <p className="mt-1 text-sm text-gray-500">
-                            Booking ID #{booking.id}
-                        </p>
+                    {/* STATUS TRANSAKSI */}
+                    <div className="mt-5 grid grid-cols-2 gap-3">
+                        <div className="rounded-3xl bg-[#F0FEF1] p-4">
+                            <p className="text-xs text-gray-500">
+                                Payment Status
+                            </p>
+                            <p className="mt-1 text-base font-bold text-[#013B09]">
+                                {transaction?.paymentStatus ?? "—"}
+                            </p>
+                        </div>
+                        <div className="rounded-3xl bg-[#F0FEF1] p-4">
+                            <p className="text-xs text-gray-500">
+                                Grooming Status
+                            </p>
+                            <p className="mt-1 text-base font-bold text-[#013B09]">
+                                {transaction?.groomingStatus ?? "—"}
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -374,17 +412,30 @@ export default function AdminBookingDetailPage() {
                 <h2 className="text-2xl font-bold text-[#013B09]">
                     Aksi Status Booking
                 </h2>
-
                 <p className="mt-1 text-sm text-gray-500">
                     Gunakan tombol ini untuk memproses status booking customer.
                 </p>
 
+                {/* HINT */}
+                {getActionHint() && (
+                    <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                        {getActionHint()}
+                    </div>
+                )}
+
                 <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-4">
                     <button
                         type="button"
-                        disabled={updating}
-                        onClick={() => handleUpdateStatus("paid")}
-                        className="flex items-center justify-center gap-2 rounded-2xl bg-blue-500 px-4 py-4 font-semibold text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-70"
+                        disabled={updating || !canVerify}
+                        onClick={handleVerifyPayment}
+                        title={
+                            !transaction
+                                ? "Tunggu customer upload bukti"
+                                : !canVerify
+                                ? "Pembayaran sudah diverifikasi"
+                                : undefined
+                        }
+                        className="flex items-center justify-center gap-2 rounded-2xl bg-blue-500 px-4 py-4 font-semibold text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <CreditCard size={18} />
                         Set Paid
@@ -392,11 +443,14 @@ export default function AdminBookingDetailPage() {
 
                     <button
                         type="button"
-                        disabled={updating}
-                        onClick={() =>
-                            handleUpdateStatus("proses_grooming")
+                        disabled={updating || !canStartGrooming}
+                        onClick={handleStartGrooming}
+                        title={
+                            !canStartGrooming
+                                ? "Verifikasi pembayaran terlebih dahulu"
+                                : undefined
                         }
-                        className="flex items-center justify-center gap-2 rounded-2xl bg-[#F96302] px-4 py-4 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-70"
+                        className="flex items-center justify-center gap-2 rounded-2xl bg-[#F96302] px-4 py-4 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <Scissors size={18} />
                         Start Grooming
@@ -404,9 +458,14 @@ export default function AdminBookingDetailPage() {
 
                     <button
                         type="button"
-                        disabled={updating}
-                        onClick={() => handleUpdateStatus("completed")}
-                        className="flex items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-4 font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-70"
+                        disabled={updating || !canComplete}
+                        onClick={handleMarkCompleted}
+                        title={
+                            !canComplete
+                                ? "Mulai grooming terlebih dahulu"
+                                : undefined
+                        }
+                        className="flex items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-4 font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <CheckCircle2 size={18} />
                         Mark Completed
@@ -414,9 +473,14 @@ export default function AdminBookingDetailPage() {
 
                     <button
                         type="button"
-                        disabled={updating}
-                        onClick={() => handleUpdateStatus("reject")}
-                        className="flex items-center justify-center gap-2 rounded-2xl bg-red-500 px-4 py-4 font-semibold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-70"
+                        disabled={updating || !canReject}
+                        onClick={handleReject}
+                        title={
+                            !canReject
+                                ? "Booking sudah selesai atau ditolak"
+                                : undefined
+                        }
+                        className="flex items-center justify-center gap-2 rounded-2xl bg-red-500 px-4 py-4 font-semibold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <XCircle size={18} />
                         Reject
@@ -450,14 +514,11 @@ function InfoCard({
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white text-[#013B09]">
                     {icon}
                 </div>
-
                 <div>
                     <p className="text-xs text-gray-500">{label}</p>
-
                     <p className="mt-1 text-lg font-bold text-[#013B09]">
                         {value}
                     </p>
-
                     {desc && (
                         <p className="mt-1 text-xs text-gray-500">{desc}</p>
                     )}
