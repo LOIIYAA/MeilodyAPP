@@ -20,9 +20,20 @@ import {
     getBookingStatusStyle,
 } from "@/lib/admin_service";
 
+const STATUS_FILTERS = [
+    { label: "Semua", value: "all" },
+    { label: "Pending", value: "pending" },
+    { label: "Paid", value: "paid" },
+    { label: "Proses Grooming", value: "proses_grooming" },
+    { label: "Completed", value: "completed" },
+    { label: "Rejected", value: "reject" },
+    { label: "Cancelled", value: "cancelled" },
+];
+
 export default function AdminBookingPage() {
     const [bookings, setBookings] = useState<AdminBooking[]>([]);
     const [search, setSearch] = useState("");
+    const [activeFilter, setActiveFilter] = useState("all");
 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -52,9 +63,20 @@ export default function AdminBookingPage() {
     const filteredBookings = useMemo(() => {
         const keyword = search.toLowerCase().trim();
 
-        if (!keyword) return bookings;
-
         return bookings.filter((booking) => {
+            // Filter by status
+            if (activeFilter !== "all") {
+                const bookingStatus = String(booking.status || "")
+                    .toLowerCase()
+                    .replace(/ /g, "_");
+                const filterValue = activeFilter.toLowerCase();
+
+                if (bookingStatus !== filterValue) return false;
+            }
+
+            // Filter by search keyword
+            if (!keyword) return true;
+
             const ownerName =
                 booking.user?.username ||
                 booking.owner?.username ||
@@ -77,7 +99,7 @@ export default function AdminBookingPage() {
                 packageName.toLowerCase().includes(keyword)
             );
         });
-    }, [bookings, search]);
+    }, [bookings, search, activeFilter]);
 
     const summary = useMemo(() => {
         return {
@@ -131,7 +153,7 @@ export default function AdminBookingPage() {
                 <SummaryCard title="Completed" value={summary.completed} />
             </div>
 
-            {/* SEARCH */}
+            {/* SEARCH & FILTER */}
             <div className="rounded-3xl border border-[#A7E8B0]/40 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -161,6 +183,52 @@ export default function AdminBookingPage() {
                         />
                     </div>
                 </div>
+
+                {/* FILTER PILLS */}
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {STATUS_FILTERS.map((filter) => {
+                        const isActive = activeFilter === filter.value;
+
+                        return (
+                            <button
+                                key={filter.value}
+                                type="button"
+                                onClick={() => setActiveFilter(filter.value)}
+                                className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                                    isActive
+                                        ? "border-[#013B09] bg-[#013B09] text-white"
+                                        : "border-[#A7E8B0] bg-[#F0FEF1] text-[#013B09] hover:border-[#013B09] hover:bg-white"
+                                }`}
+                            >
+                                {filter.label}
+                                {filter.value !== "all" && (
+                                    <span className="ml-2 opacity-70">
+                                        (
+                                        {
+                                            bookings.filter((b) => {
+                                                const s = String(
+                                                    b.status || ""
+                                                )
+                                                    .toLowerCase()
+                                                    .replace(/ /g, "_");
+                                                return (
+                                                    s ===
+                                                    filter.value.toLowerCase()
+                                                );
+                                            }).length
+                                        }
+                                        )
+                                    </span>
+                                )}
+                                {filter.value === "all" && (
+                                    <span className="ml-2 opacity-70">
+                                        ({bookings.length})
+                                    </span>
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
             </div>
 
             {/* TABLE */}
@@ -183,7 +251,9 @@ export default function AdminBookingPage() {
                         </h3>
 
                         <p className="mt-2 text-sm text-gray-500">
-                            Coba gunakan keyword lain.
+                            {activeFilter !== "all"
+                                ? `Tidak ada booking dengan status "${STATUS_FILTERS.find((f) => f.value === activeFilter)?.label}".`
+                                : "Coba gunakan keyword lain."}
                         </p>
                     </div>
                 ) : (

@@ -23,6 +23,23 @@ import {
     HistorySummaryCard,
 } from "@/components/customer/history/HistoryShared";
 
+/* =========================
+   STATUS FILTERS
+========================= */
+
+const STATUS_FILTERS = [
+    { label: "Semua", value: "all" },
+    { label: "Pending", value: "pending" },
+    { label: "Paid", value: "paid" },
+    { label: "Proses Grooming", value: "proses_grooming" },
+    { label: "Completed", value: "completed" },
+    { label: "Cancelled", value: "cancelled" },
+];
+
+/* =========================
+   NORMALIZE HELPERS
+========================= */
+
 function normalizeBookings(data: unknown): CustomerBooking[] {
     if (Array.isArray(data)) {
         return data.filter((item) => item && item.id);
@@ -115,6 +132,10 @@ function findTransactionByBookingId(
     );
 }
 
+/* =========================
+   LOCAL STORAGE HELPERS
+========================= */
+
 const LOCAL_TRANSACTION_KEY = "meilody_uploaded_transactions";
 
 function getLocalTransactions(): CustomerTransaction[] {
@@ -169,6 +190,46 @@ function mergeTransactions(
     return Array.from(uniqueByBooking.values());
 }
 
+/* =========================
+   FILTER HELPER
+========================= */
+
+function filterBookings(
+    bookings: CustomerBooking[],
+    keyword: string,
+    statusFilter: string
+) {
+    return bookings.filter((booking) => {
+        // Filter by status
+        if (statusFilter !== "all") {
+            const bookingStatus = String(booking.status || "")
+                .toLowerCase()
+                .replace(/ /g, "_");
+            const filterValue = statusFilter.toLowerCase();
+
+            if (bookingStatus !== filterValue) return false;
+        }
+
+        // Filter by search keyword
+        const query = keyword.toLowerCase().trim();
+        if (!query) return true;
+
+        return (
+            booking.id.toString().includes(query) ||
+            String(booking.status || "").toLowerCase().includes(query) ||
+            String(booking.jam || "").toLowerCase().includes(query) ||
+            String(booking.tanggal || "").toLowerCase().includes(query) ||
+            String(booking.pet?.name || "").toLowerCase().includes(query) ||
+            String(booking.pet?.type || "").toLowerCase().includes(query) ||
+            String(booking.package?.name || "").toLowerCase().includes(query)
+        );
+    });
+}
+
+/* =========================
+   PAGE COMPONENT
+========================= */
+
 export default function CustomerHistoryPage() {
     const [currentBookings, setCurrentBookings] = useState<CustomerBooking[]>(
         []
@@ -179,6 +240,8 @@ export default function CustomerHistoryPage() {
     const [transactions, setTransactions] = useState<CustomerTransaction[]>([]);
 
     const [search, setSearch] = useState("");
+    const [activeFilter, setActiveFilter] = useState("all");
+
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [cancellingId, setCancellingId] = useState<number | null>(null);
@@ -334,13 +397,19 @@ export default function CustomerHistoryPage() {
         }
     };
 
+    // Semua booking digabung untuk keperluan hitung badge filter
+    const allBookings = useMemo(
+        () => [...currentBookings, ...historyBookings],
+        [currentBookings, historyBookings]
+    );
+
     const filteredCurrentBookings = useMemo(() => {
-        return filterBookings(currentBookings, search);
-    }, [currentBookings, search]);
+        return filterBookings(currentBookings, search, activeFilter);
+    }, [currentBookings, search, activeFilter]);
 
     const filteredHistoryBookings = useMemo(() => {
-        return filterBookings(historyBookings, search);
-    }, [historyBookings, search]);
+        return filterBookings(historyBookings, search, activeFilter);
+    }, [historyBookings, search, activeFilter]);
 
     const completedCount = useMemo(() => {
         return historyBookings.filter(
@@ -385,6 +454,7 @@ export default function CustomerHistoryPage() {
                 </div>
             )}
 
+            {/* HERO */}
             <div className="relative overflow-hidden rounded-3xl border border-[#A7E8B0]/50 bg-white p-8 shadow-sm md:p-10">
                 <CalendarDays className="absolute right-10 top-8 h-20 w-20 rotate-12 text-[#A7E8B0]/40" />
                 <PawPrint className="absolute bottom-6 right-44 h-12 w-12 -rotate-12 text-[#A7E8B0]/40" />
@@ -420,6 +490,7 @@ export default function CustomerHistoryPage() {
                 </div>
             </div>
 
+            {/* SUMMARY CARDS */}
             <div className="mt-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
                 <HistorySummaryCard
                     title="Booking Aktif"
@@ -446,6 +517,7 @@ export default function CustomerHistoryPage() {
                 />
             </div>
 
+            {/* SEARCH & FILTER */}
             <div className="mt-8 rounded-3xl border border-[#A7E8B0]/40 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -475,8 +547,46 @@ export default function CustomerHistoryPage() {
                         />
                     </div>
                 </div>
+
+                {/* FILTER PILLS */}
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {STATUS_FILTERS.map((filter) => {
+                        const isActive = activeFilter === filter.value;
+
+                        const count =
+                            filter.value === "all"
+                                ? allBookings.length
+                                : allBookings.filter((b) => {
+                                      const s = String(b.status || "")
+                                          .toLowerCase()
+                                          .replace(/ /g, "_");
+                                      return (
+                                          s === filter.value.toLowerCase()
+                                      );
+                                  }).length;
+
+                        return (
+                            <button
+                                key={filter.value}
+                                type="button"
+                                onClick={() => setActiveFilter(filter.value)}
+                                className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                                    isActive
+                                        ? "border-[#013B09] bg-[#013B09] text-white"
+                                        : "border-[#A7E8B0] bg-[#F0FEF1] text-[#013B09] hover:border-[#013B09] hover:bg-white"
+                                }`}
+                            >
+                                {filter.label}
+                                <span className="ml-2 opacity-70">
+                                    ({count})
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
             </div>
 
+            {/* BOOKING LIST */}
             {loading ? (
                 <div className="mt-8 space-y-5">
                     {Array.from({ length: 4 }).map((_, index) => (
@@ -488,6 +598,7 @@ export default function CustomerHistoryPage() {
                 </div>
             ) : (
                 <div className="mt-8 space-y-10">
+                    {/* BOOKING AKTIF */}
                     <section>
                         <HistorySectionHeader
                             title="Booking Sedang Berjalan"
@@ -496,8 +607,16 @@ export default function CustomerHistoryPage() {
 
                         {filteredCurrentBookings.length === 0 ? (
                             <EmptyHistoryBox
-                                title="Belum ada booking aktif"
-                                desc="Booking aktif akan muncul setelah kamu membuat jadwal grooming."
+                                title={
+                                    activeFilter !== "all"
+                                        ? `Tidak ada booking aktif dengan status "${STATUS_FILTERS.find((f) => f.value === activeFilter)?.label}"`
+                                        : "Belum ada booking aktif"
+                                }
+                                desc={
+                                    activeFilter !== "all"
+                                        ? "Coba pilih filter status lain."
+                                        : "Booking aktif akan muncul setelah kamu membuat jadwal grooming."
+                                }
                             />
                         ) : (
                             <div className="space-y-5">
@@ -532,6 +651,7 @@ export default function CustomerHistoryPage() {
                         )}
                     </section>
 
+                    {/* RIWAYAT BOOKING */}
                     <section>
                         <HistorySectionHeader
                             title="Riwayat Booking"
@@ -540,8 +660,16 @@ export default function CustomerHistoryPage() {
 
                         {filteredHistoryBookings.length === 0 ? (
                             <EmptyHistoryBox
-                                title="Belum ada riwayat booking"
-                                desc="Riwayat grooming akan muncul setelah booking selesai atau dibatalkan."
+                                title={
+                                    activeFilter !== "all"
+                                        ? `Tidak ada riwayat dengan status "${STATUS_FILTERS.find((f) => f.value === activeFilter)?.label}"`
+                                        : "Belum ada riwayat booking"
+                                }
+                                desc={
+                                    activeFilter !== "all"
+                                        ? "Coba pilih filter status lain."
+                                        : "Riwayat grooming akan muncul setelah booking selesai atau dibatalkan."
+                                }
                             />
                         ) : (
                             <div className="space-y-5">
@@ -579,22 +707,4 @@ export default function CustomerHistoryPage() {
             )}
         </section>
     );
-}
-
-function filterBookings(bookings: CustomerBooking[], keyword: string) {
-    const query = keyword.toLowerCase().trim();
-
-    if (!query) return bookings;
-
-    return bookings.filter((booking) => {
-        return (
-            booking.id.toString().includes(query) ||
-            String(booking.status || "").toLowerCase().includes(query) ||
-            String(booking.jam || "").toLowerCase().includes(query) ||
-            String(booking.tanggal || "").toLowerCase().includes(query) ||
-            String(booking.pet?.name || "").toLowerCase().includes(query) ||
-            String(booking.pet?.type || "").toLowerCase().includes(query) ||
-            String(booking.package?.name || "").toLowerCase().includes(query)
-        );
-    });
 }
