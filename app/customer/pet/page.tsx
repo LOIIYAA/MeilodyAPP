@@ -12,7 +12,7 @@ import {
     deletePet,
 } from "@/lib/Customer_Service";
 
-const PET_HERO_IMAGE = "/CustomerPhoto/pet/PetHero.jpg";
+const PET_HERO_IMAGE = "/CustomerPhoto/pet/PetHero.png";
 const PET_EMPTY_IMAGE = "/CustomerPhoto/pet/PetEmpty.jpg";
 
 type PetFormPayload = {
