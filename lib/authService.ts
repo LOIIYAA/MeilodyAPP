@@ -7,11 +7,20 @@ import {
 
 const API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-    
-    console.log("API BASE URL =", API_BASE_URL);
 
 function getApiUrl(path: string) {
     return `${API_BASE_URL.replace(/\/$/, "")}${path}`;
+}
+
+// Decode JWT tanpa library tambahan
+function decodeJwtPayload(token: string) {
+    try {
+        const base64 = token.split(".")[1];
+        const decoded = JSON.parse(atob(base64));
+        return decoded;
+    } catch {
+        return null;
+    }
 }
 
 async function getErrorMessage(response: Response) {
@@ -71,7 +80,19 @@ export async function loginUser(
         throw new Error(message);
     }
 
-    return response.json();
+    const data = await response.json();
+
+    // Decode role dari JWT karena backend tidak mengembalikan field "user"
+    const jwtPayload = decodeJwtPayload(data.token);
+
+    return {
+        ...data,
+        user: {
+            id: jwtPayload?.id ?? null,
+            email: jwtPayload?.email ?? null,
+            role: jwtPayload?.role ?? null,
+        },
+    };
 }
 
 export function saveAuthSession(data: LoginResponse) {

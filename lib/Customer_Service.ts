@@ -1,7 +1,5 @@
 // lib/Customer_Service.ts
 
-
-
 const API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
@@ -189,9 +187,9 @@ export interface UploadTransactionPayload {
 }
 
 export interface CustomerTransaction {
-    booking_id(booking_id: any): unknown;
     id: number;
-    bookingId: number;
+    bookingId?: number;
+    booking_id?: number;
     total: number | string;
     proof?: string;
     proofUrl?: string;
@@ -321,11 +319,7 @@ export function cancelBooking(id: number | string) {
 
 /* =========================
    AVAILABLE SLOT
-   Endpoint utama dari Postman:
    GET /booking/available-slot?date=YYYY-MM-DD
-
-   Fallback kalau backend pakai path param:
-   GET /booking/available-slot/YYYY-MM-DD
 ========================= */
 
 export const DEFAULT_BOOKING_SLOTS = [
@@ -395,9 +389,7 @@ export async function getAvailableSlots(date: string) {
     try {
         const response = await apiRequest<AvailableSlotResponse | string[]>(
             `/booking/available-slot?date=${encodeURIComponent(date)}`,
-            {
-                method: "GET",
-            }
+            { method: "GET" }
         );
 
         return normalizeSlots(response);
@@ -405,9 +397,7 @@ export async function getAvailableSlots(date: string) {
         try {
             const response = await apiRequest<AvailableSlotResponse | string[]>(
                 `/booking/available-slot/${encodeURIComponent(date)}`,
-                {
-                    method: "GET",
-                }
+                { method: "GET" }
             );
 
             return normalizeSlots(response);
@@ -419,17 +409,22 @@ export async function getAvailableSlots(date: string) {
 
 /* =========================
    TRANSAKSI / PAYMENT
-   POST /transaksi
+   POST GET /transaksi
    GET  /transaksi/my
    GET  /transaksi/:id
+   GET  /transaksi/:id/print  ← invoice
 ========================= */
 
-export function uploadTransaction(payload: UploadTransactionPayload) {
+export async function uploadTransaction({
+    bookingId,
+    total,
+    proof,
+}: UploadTransactionPayload) {
     const formData = new FormData();
 
-    formData.append("proof", payload.proof);
-    formData.append("bookingId", String(payload.bookingId));
-    formData.append("total", String(payload.total));
+    formData.append("bookingId", String(bookingId));
+    formData.append("total", String(total));
+    formData.append("proof", proof);
 
     return apiRequest<CustomerTransaction>("/transaksi", {
         method: "POST",
@@ -447,6 +442,37 @@ export function getTransactionById(id: number | string) {
     return apiRequest<CustomerTransaction>(`/transaksi/${id}`, {
         method: "GET",
     });
+}
+
+export async function downloadInvoice(transaksiId: number | string) {
+    const token = getToken();
+
+    const response = await fetch(
+        getApiUrl(`/transaksi/${transaksiId}/print`),
+        {
+            method: "GET",
+            headers: {
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(
+            `Gagal mengunduh invoice. Status: ${response.status}`
+        );
+    }
+
+    // Backend return PDF binary, buka sebagai blob PDF
+    const blob = await response.blob();
+    const url = URL.createObjectURL(
+        new Blob([blob], { type: "application/pdf" })
+    );
+
+    window.open(url, "_blank");
+
+    // Cleanup blob URL setelah dibuka
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 /* =========================
@@ -529,7 +555,11 @@ export function getBookingStatusStyle(status?: string | null) {
         return "border-green-200 bg-green-50 text-green-700";
     }
 
-    if (normalized === "reject" || normalized === "cancelled" || normalized === "canceled") {
+    if (
+        normalized === "reject" ||
+        normalized === "cancelled" ||
+        normalized === "canceled"
+    ) {
         return "border-red-200 bg-red-50 text-red-700";
     }
 
@@ -563,7 +593,11 @@ export function getPaymentStatusStyle(status?: string | null) {
         return "border-green-200 bg-green-50 text-green-700";
     }
 
-    if (normalized === "reject" || normalized === "cancelled" || normalized === "canceled") {
+    if (
+        normalized === "reject" ||
+        normalized === "cancelled" ||
+        normalized === "canceled"
+    ) {
         return "border-red-200 bg-red-50 text-red-700";
     }
 
@@ -591,6 +625,6 @@ export function getTransactionByBookingId(
 
 export function getBookingTotal(booking?: CustomerBooking | null) {
     if (!booking) return 0;
-    
+
     return booking.package?.price ?? booking.transaction?.total ?? 0;
 }

@@ -7,6 +7,7 @@ import {
     CustomerBooking,
     CustomerTransaction,
     cancelBooking,
+    downloadInvoice,
     getBookingHistory,
     getCurrentBookings,
     getMyTransactions,
@@ -108,7 +109,8 @@ function findTransactionByBookingId(
     return (
         transactions.find(
             (transaction) =>
-                Number(getTransactionBookingId(transaction)) === Number(bookingId)
+                Number(getTransactionBookingId(transaction)) ===
+                Number(bookingId)
         ) ?? null
     );
 }
@@ -139,7 +141,8 @@ function saveLocalTransaction(transaction: CustomerTransaction) {
     const existing = getLocalTransactions();
 
     const filtered = existing.filter(
-        (item) => Number(getTransactionBookingId(item)) !== Number(bookingId)
+        (item) =>
+            Number(getTransactionBookingId(item)) !== Number(bookingId)
     );
 
     localStorage.setItem(
@@ -167,8 +170,12 @@ function mergeTransactions(
 }
 
 export default function CustomerHistoryPage() {
-    const [currentBookings, setCurrentBookings] = useState<CustomerBooking[]>([]);
-    const [historyBookings, setHistoryBookings] = useState<CustomerBooking[]>([]);
+    const [currentBookings, setCurrentBookings] = useState<CustomerBooking[]>(
+        []
+    );
+    const [historyBookings, setHistoryBookings] = useState<CustomerBooking[]>(
+        []
+    );
     const [transactions, setTransactions] = useState<CustomerTransaction[]>([]);
 
     const [search, setSearch] = useState("");
@@ -176,6 +183,9 @@ export default function CustomerHistoryPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [cancellingId, setCancellingId] = useState<number | null>(null);
     const [uploadingId, setUploadingId] = useState<number | null>(null);
+    const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<
+        number | null
+    >(null);
 
     const [error, setError] = useState("");
     const [successMessage, setSuccessMessage] = useState("");
@@ -205,7 +215,10 @@ export default function CustomerHistoryPage() {
             setCurrentBookings(normalizedCurrentBookings);
             setHistoryBookings(normalizedHistoryBookings);
             setTransactions(
-                mergeTransactions(normalizedApiTransactions, localTransactions)
+                mergeTransactions(
+                    normalizedApiTransactions,
+                    localTransactions
+                )
             );
         } catch (error) {
             console.error("Gagal mengambil data history:", error);
@@ -226,7 +239,9 @@ export default function CustomerHistoryPage() {
     };
 
     const handleCancelBooking = async (bookingId: number) => {
-        const confirmed = window.confirm("Yakin ingin membatalkan booking ini?");
+        const confirmed = window.confirm(
+            "Yakin ingin membatalkan booking ini?"
+        );
         if (!confirmed) return;
 
         try {
@@ -303,6 +318,22 @@ export default function CustomerHistoryPage() {
         }
     };
 
+    const handleDownloadInvoice = async (transaksiId: number) => {
+        try {
+            setDownloadingInvoiceId(transaksiId);
+            setError("");
+            await downloadInvoice(transaksiId);
+        } catch (err) {
+            setError(
+                err instanceof Error
+                    ? err.message
+                    : "Gagal mengunduh invoice."
+            );
+        } finally {
+            setDownloadingInvoiceId(null);
+        }
+    };
+
     const filteredCurrentBookings = useMemo(() => {
         return filterBookings(currentBookings, search);
     }, [currentBookings, search]);
@@ -313,7 +344,8 @@ export default function CustomerHistoryPage() {
 
     const completedCount = useMemo(() => {
         return historyBookings.filter(
-            (booking) => String(booking.status).toLowerCase() === "completed"
+            (booking) =>
+                String(booking.status).toLowerCase() === "completed"
         ).length;
     }, [historyBookings]);
 
@@ -368,7 +400,8 @@ export default function CustomerHistoryPage() {
                         </h1>
 
                         <p className="mt-4 max-w-2xl text-gray-600">
-                            Pantau booking aktif, status pembayaran, dan riwayat grooming anabul kamu.
+                            Pantau booking aktif, status pembayaran, dan
+                            riwayat grooming anabul kamu.
                         </p>
                     </div>
 
@@ -421,7 +454,8 @@ export default function CustomerHistoryPage() {
                         </h2>
 
                         <p className="mt-1 text-sm text-gray-500">
-                            Cari berdasarkan ID booking, pet, paket, status, tanggal, atau jam.
+                            Cari berdasarkan ID booking, pet, paket, status,
+                            tanggal, atau jam.
                         </p>
                     </div>
 
@@ -433,7 +467,9 @@ export default function CustomerHistoryPage() {
 
                         <input
                             value={search}
-                            onChange={(event) => setSearch(event.target.value)}
+                            onChange={(event) =>
+                                setSearch(event.target.value)
+                            }
                             placeholder="Cari history..."
                             className="h-12 w-full rounded-2xl border border-[#A7E8B0]/50 bg-[#F0FEF1] pl-11 pr-4 text-sm text-[#013B09] outline-none transition focus:border-[#013B09]"
                         />
@@ -479,8 +515,16 @@ export default function CustomerHistoryPage() {
                                             transaction={transaction}
                                             onCancel={handleCancelBooking}
                                             cancellingId={cancellingId}
-                                            onUploadProof={handleUploadProofFromHistory}
+                                            onUploadProof={
+                                                handleUploadProofFromHistory
+                                            }
                                             uploadingId={uploadingId}
+                                            onDownloadInvoice={
+                                                handleDownloadInvoice
+                                            }
+                                            downloadingInvoiceId={
+                                                downloadingInvoiceId
+                                            }
                                         />
                                     );
                                 })}
@@ -515,8 +559,16 @@ export default function CustomerHistoryPage() {
                                             transaction={transaction}
                                             onCancel={handleCancelBooking}
                                             cancellingId={cancellingId}
-                                            onUploadProof={handleUploadProofFromHistory}
+                                            onUploadProof={
+                                                handleUploadProofFromHistory
+                                            }
                                             uploadingId={uploadingId}
+                                            onDownloadInvoice={
+                                                handleDownloadInvoice
+                                            }
+                                            downloadingInvoiceId={
+                                                downloadingInvoiceId
+                                            }
                                         />
                                     );
                                 })}

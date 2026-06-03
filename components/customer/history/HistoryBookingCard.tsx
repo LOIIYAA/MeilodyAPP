@@ -7,6 +7,7 @@ import {
     CreditCard,
     Download,
     Eye,
+    FileText,
     PawPrint,
     Scissors,
     XCircle,
@@ -32,6 +33,8 @@ interface HistoryBookingCardProps {
     cancellingId?: number | null;
     onUploadProof?: (booking: CustomerBooking, file: File) => Promise<void>;
     uploadingId?: number | null;
+    onDownloadInvoice?: (transaksiId: number) => void;
+    downloadingInvoiceId?: number | null;
 }
 
 function canCancelBooking(status?: string | null) {
@@ -47,6 +50,8 @@ export default function HistoryBookingCard({
     cancellingId = null,
     onUploadProof,
     uploadingId = null,
+    onDownloadInvoice,
+    downloadingInvoiceId = null,
 }: HistoryBookingCardProps) {
     if (!booking || !booking.id) {
         return null;
@@ -74,10 +79,15 @@ export default function HistoryBookingCard({
 
     const isCancelling = cancellingId === bookingId;
     const isUploading = uploadingId === bookingId;
+    const isDownloadingInvoice =
+        transaction?.id !== undefined &&
+        downloadingInvoiceId === transaction.id;
 
     const showUploadButton = Boolean(onUploadProof) && !hasProof;
     const showCancelButton =
         Boolean(onCancel) && canCancelBooking(booking.status);
+    const showInvoiceButton =
+        Boolean(onDownloadInvoice) && Boolean(transaction?.id);
 
     const petName = booking.pet?.name || `Pet #${booking.petId || "-"}`;
     const petType = booking.pet?.type || "Pet Grooming";
@@ -206,7 +216,8 @@ export default function HistoryBookingCard({
                             </p>
                         </div>
 
-                        <div className="flex flex-col gap-2 sm:flex-row">
+                        <div className="flex flex-wrap gap-2">
+                            {/* Lihat Bukti */}
                             <a
                                 href={proofUrl}
                                 target="_blank"
@@ -217,6 +228,7 @@ export default function HistoryBookingCard({
                                 Lihat Bukti
                             </a>
 
+                            {/* Unduh Bukti */}
                             <a
                                 href={proofUrl}
                                 download
@@ -227,6 +239,23 @@ export default function HistoryBookingCard({
                                 <Download size={15} />
                                 Unduh Bukti
                             </a>
+
+                            {/* Download Invoice */}
+                            {showInvoiceButton && (
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        onDownloadInvoice?.(transaction.id)
+                                    }
+                                    disabled={isDownloadingInvoice}
+                                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#013B09] bg-white px-4 py-3 text-xs font-semibold text-[#013B09] transition hover:bg-[#F0FEF1] disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                    <FileText size={15} />
+                                    {isDownloadingInvoice
+                                        ? "Memproses..."
+                                        : "Invoice"}
+                                </button>
+                            )}
                         </div>
                     </div>
 
